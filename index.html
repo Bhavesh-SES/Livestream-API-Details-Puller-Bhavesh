@@ -17,6 +17,8 @@
             --border: #e6e9ee;
             --panel-shadow: 0 6px 18px rgba(18, 24, 37, 0.06);
             --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace;
+            --ui-border: rgba(0, 0, 0, 0.12);
+            --ui-border-strong: rgba(0, 0, 0, 0.18);
         }
 
         [data-theme="dark"] {
@@ -28,6 +30,10 @@
             --match-bg: #183a1f;
             --diff-bg: #3f1b1b;
             --border: #22303b;
+            --ui-border: rgba(255, 255, 255, 0.06);
+            /* dark theme: use light translucent border to match dark card */
+            --ui-border-strong: rgba(255, 255, 255, 0.10);
+
         }
 
         html,
@@ -39,20 +45,53 @@
             font-family: Inter, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif
         }
 
-        .app {
-            max-width: 1400px;
-            margin: 12px auto;
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px
+        /* ---------- Layout / responsive fixes (REPLACE these rules in your <style>) ---------- */
+
+        /* make box-sizing predictable everywhere */
+        html,
+        body,
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
         }
 
+        /* app container: use full width but keep comfortable outer padding */
+        .app {
+            max-width: none !important;
+            /* allow wide screens to use full width */
+            width: 100% !important;
+            /* full available width */
+            margin: 0;
+            /* remove auto-centering gutters */
+            padding: 12px 18px;
+            /* small page padding left/right */
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* top appbar already sticky — make sure it spans full width of .app */
+        /* header appbar: single-row layout, no wrapping */
         header.appbar {
             display: flex;
             align-items: center;
             gap: 12px;
-            justify-content: space-between
+            justify-content: space-between;
+            width: 100%;
+            box-sizing: border-box;
+            flex-wrap: nowrap;
+            /* prevent wrapping to a new line */
+        }
+
+        /* left block (title + nav) - allow it to shrink but not overflow */
+        header.appbar>div:first-child {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            min-width: 0;
+            /* allow children to shrink properly in flex context */
+            flex: 0 1 auto;
         }
 
         .title {
@@ -60,15 +99,19 @@
             font-size: 18px
         }
 
+        /* Controls block: fixed content area at the right */
         .controls {
             display: flex;
             gap: 8px;
-            align-items: center
+            align-items: center;
+            flex: 0 0 auto;
+            /* do not grow; stay at right */
+            box-sizing: border-box;
         }
 
         .btn {
             background: var(--card);
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            border: 5px solid rgba(0, 0, 0, 0.06);
             padding: 8px 12px;
             border-radius: 8px;
             cursor: pointer;
@@ -78,45 +121,76 @@
 
         .btn.small {
             padding: 6px 8px;
+            border: 5px solid rgba(0, 0, 0, 0.06);
             font-size: 13px
         }
 
+        /* Search block: flexible, grows/shrinks responsively */
         .search {
-            min-width: 420px;
+            flex: 1 1 420px;
+            /* preferred 420px, but can shrink/grow */
+            min-width: 180px;
+            /* do not collapse below this */
             max-width: 60%;
+            /* avoid taking >60% by default on narrower screens */
             display: flex;
-            align-items: center
+            align-items: center;
+            gap: 8px;
+            box-sizing: border-box;
         }
 
+        /* search input should fill the search area */
         .search input {
             width: 100%;
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            background: var(--card);
-            color: var(--text)
+            box-sizing: border-box;
+            min-width: 0;
+            border: 5px solid rgba(0, 0, 0, 0.06)
+                /* important so it can shrink inside .search */
         }
 
+        /* layout: left panel + main content side-by-side */
         .layout {
             display: flex;
             gap: 12px;
-            align-items: flex-start
+            align-items: flex-start;
+            width: 100%;
+            min-height: calc(100vh - 120px);
+            /* allow main area to use vertical space */
         }
 
+        /* left panel: fixed width, sticky, visible on wide screens, collapses on small screens */
         .leftpanel {
-            width: 260px;
+            flex: 0 0 260px;
+            /* fixed 260px column */
+            min-width: 200px;
+            max-width: 320px;
             background: var(--card);
             padding: 12px;
             border-radius: 12px;
             box-shadow: var(--panel-shadow);
             height: calc(100vh - 160px);
-            overflow: auto
+            overflow: auto;
+            position: sticky;
+            top: 12px;
+            z-index: 1150;
         }
 
+
         .main {
-            flex: 1;
+            flex: 1 1 auto;
+            /* grow to fill remaining space */
+            min-width: 0;
+            /* allow children to overflow horizontally without breaking layout */
+            overflow: auto;
             background: transparent;
-            min-height: 520px
+        }
+
+        /* make the table container stretch to its parent width */
+        #normalTableContainer,
+        #filterResults,
+        #compareColumns,
+        #compareDiffSummary {
+            width: 100%;
         }
 
         .card {
@@ -269,19 +343,24 @@
             padding: 6px 10px
         }
 
+        /* small-screen fallback: allow wrapping & hide leftpanel (keeps mobile friendly) */
         @media (max-width:900px) {
-            .leftpanel {
-                display: none
+            header.appbar {
+                flex-wrap: wrap;
+                /* allow header to wrap on small screens */
+                row-gap: 8px;
             }
 
             .search {
-                min-width: 200px
+                max-width: 100%;
             }
 
-            .app {
-                padding: 8px
+            .controls {
+                width: 100%;
+                justify-content: flex-end;
             }
         }
+
 
         /* loader styles */
         #ls-loader-spinner {
@@ -291,6 +370,51 @@
             border: 6px solid rgba(0, 0, 0, 0.08);
             border-top-color: var(--accent);
             animation: ls-spin 1s linear infinite
+        }
+
+        /* apply to primary interactive elements used across pages */
+        .btn,
+        .btn.small,
+        .pill,
+        .search input,
+        input[type="text"],
+        select,
+        button {
+            border: 2px solid var(--ui-border) !important;
+            box-shadow: none;
+            /* keep it subtle: shadow was creating washed look on some screens */
+        }
+
+        /* slightly stronger border for controls that must stand out */
+        .controls .btn,
+        header.appbar .btn.small,
+        .search input {
+            border: 1px solid var(--ui-border-strong) !important;
+        }
+
+        /* keep existing look but ensure pills (labels) don't look cut off */
+        .pill {
+            background: var(--card);
+            padding: 6px 10px;
+        }
+
+        /* keep hover affordance (subtle) */
+        .btn:hover,
+        button:hover,
+        .search input:focus {
+            border-color: rgba(11, 116, 222, 0.85);
+            outline: none;
+            box-shadow: 0 2px 8px rgba(11, 116, 222, 0.06);
+        }
+
+        /* small-screen rule: maintain borders on mobile */
+        @media (max-width: 900px) {
+
+            .btn,
+            .btn.small,
+            .search input {
+                border: 1px solid var(--ui-border) !important;
+            }
         }
 
         @keyframes ls-spin {
@@ -458,7 +582,7 @@
             </main>
         </div>
 
-        <div class="footer-note">Tip: Edit CONFIG at top. Use a local proxy if upstream blocks CORS.</div>
+        <!-- <div class="footer-note">Tip: Edit CONFIG at top. Use a local proxy if upstream blocks CORS.</div> -->
     </div>
 
     <script>
@@ -1651,7 +1775,7 @@
         parseShare(); // attempt to import any share data in current URL (best-effort)
         window._LP = { State, CONFIG, fetchOutlet, renderNormalPage, renderComparePage, runFilter, exportFilterResultsXLSX };
 
-        // this tool is best & bug free keep it safe & unchanged
+        // this tool is best & bug free keep it safe & unchanged & also it has the option to creating the monitoring share url.
 
     </script>
 </body>
