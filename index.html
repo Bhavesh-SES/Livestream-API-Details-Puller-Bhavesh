@@ -1632,7 +1632,8 @@
             };
 
             // create final URL for the external playback tool (example host)
-            const base = opts.baseUrl || 'https://bhavesh-ses.github.io/URL-Monitoring-Tool/';
+            /*const base = opts.baseUrl || 'https://bhavesh-ses.github.io/URL-Monitoring-Tool/';*/
+            const base = opts.baseUrl || 'https://10.219.226.10/SES_Tools/Monitoring_Tool/'; // Changing this url to dev VM URL so that it use correct Monitoring PLAYER FOR PLAYBACK.)
             const params = new URLSearchParams();
             params.set('data', encoded);
             params.set('rows', String(layout.rows));
