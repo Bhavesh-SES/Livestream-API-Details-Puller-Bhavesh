@@ -228,6 +228,13 @@
             text-align: left
         }
 
+        /* optional: stronger table borders for clarity in light mode */
+        table.data th,
+        table.data td {
+            border: 1px solid rgba(0, 0, 0, 0.14);
+        }
+
+
         th {
             font-weight: 600;
             background: transparent;
@@ -472,7 +479,9 @@
                     <a href="#/normal" id="navNormal" class="pill">Normal</a>
                     <a href="#/compare" id="navCompare" class="pill">Compare</a>
                     <a href="#/filters" id="navFilters" class="pill">Filters</a>
+                    <a href="#/fetch" id="navFetch" class="pill">Fetch Events</a>
                 </nav>
+
             </div>
 
             <div class="search">
@@ -578,6 +587,37 @@
                     <div id="filterTabsHolder" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"></div>
                     <div id="filterResults" style="margin-top:12px;overflow:auto"></div>
                 </div>
+                <!-- Fetch Events -->
+                <div id="pageFetch" class="card page" style="display:none">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <div>
+                            <strong>Fetch Events</strong>
+                            <div class="small-muted">Paste pairs (one per line) in the format:
+                                <code>override[TAB or ,]mflId</code>. Trimmed automatically.
+                            </div>
+                        </div>
+                        <div class="hint">Search order: USA, Japan, France, DACH, Spain, ROW, Canada, MENA, Taiwan,
+                            Portugal, Brazil, Italy, Belgium</div>
+                    </div>
+
+                    <div style="margin-top:10px">
+                        <textarea id="fetchInput"
+                            placeholder="Paste Override and MFL pairs here (one per line). Example: 3745[TAB]jz4o2l49..."
+                            style="width:100%;height:180px;padding:8px;border-radius:8px;border:1px solid var(--border);box-sizing:border-box"></textarea>
+                    </div>
+
+                    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+                        <button class="btn small" id="runFetchBtn">Run Fetch</button>
+                        <button class="btn small" id="cancelFetchBtn" style="display:none">Cancel</button>
+                        <button class="btn small" id="exportFetchBtn">Export Results</button>
+                        <div style="margin-left:auto" class="small-muted">Results will show below in a table (one row
+                            per input combination).</div>
+                    </div>
+
+                    <div id="fetchResultsContainer" style="margin-top:12px;overflow:auto"></div>
+                </div>
+
+
 
             </main>
         </div>
@@ -756,6 +796,10 @@
             // filter run buttons (top & left)
             const filterRunBtnElem = $('filterRunBtn') || $('filterRunBtnTop');
             if (filterRunBtnElem) filterRunBtnElem.addEventListener('click', runFilter);
+            // fetch events bindings (if elements present these will attach)
+            $('runFetchBtn') && $('runFetchBtn').addEventListener && $('runFetchBtn').addEventListener('click', () => renderFetchPage());
+            $('exportFetchBtn') && $('exportFetchBtn').addEventListener && $('exportFetchBtn').addEventListener('click', () => exportFetchResultsXLSX());
+
 
             // create URLs
             createUrlsNormalBtn && createUrlsNormalBtn.addEventListener('click', () => createUrlsFromSelected('normal'));
@@ -775,17 +819,20 @@
         /* ---------- Router ---------- */
         function renderCurrentPage() { showPage(location.hash || '#/normal') }
         function showPage(hash) {
-            const pages = ['pageNormal', 'pageCompare', 'pageFilters'];
-            pages.forEach(id => $(id).style.display = 'none');
-            // left panel visible only for compare/filters
-            if (hash === '#/compare' || hash === '#/filters') $('leftPanel').style.display = 'block'; else $('leftPanel').style.display = 'none';
+            const pages = ['pageNormal', 'pageCompare', 'pageFilters', 'pageFetch'];
+            pages.forEach(id => { const el = $(id); if (el) el.style.display = 'none'; });
+
+            // left panel visible only for compare/filters/fetch
+            if (hash === '#/compare' || hash === '#/filters' || hash === '#/fetch') $('leftPanel').style.display = 'block'; else $('leftPanel').style.display = 'none';
+
             if (hash === '#/compare') $('pageCompare').style.display = 'block';
             else if (hash === '#/filters') $('pageFilters').style.display = 'block';
+            else if (hash === '#/fetch') $('pageFetch').style.display = 'block';
             else $('pageNormal').style.display = 'block';
 
-            // nav visual
+            // nav visual (includes fetch)
             const cur = (location.hash || '#/normal').replace('#/', '');
-            ['navNormal', 'navCompare', 'navFilters'].forEach(id => {
+            ['navNormal', 'navCompare', 'navFilters', 'navFetch'].forEach(id => {
                 const a = $(id);
                 if (!a) return;
                 const name = id.replace('nav', '').toLowerCase();
@@ -795,8 +842,10 @@
             // run page renderers
             if (hash === '#/compare') renderComparePage(false);
             else if (hash === '#/filters') renderFiltersPage();
+            else if (hash === '#/fetch') renderFetchPage();
             else renderNormalPage();
         }
+
         window.addEventListener('hashchange', () => showPage(location.hash));
         function initRouter() { if (!location.hash) location.hash = '#/normal'; showPage(location.hash); }
 
@@ -1406,6 +1455,388 @@
         }
 
         /* ---------- Exports ---------- */
+        /* ---------- Fetch Events: parsing, search, render, export, cancel ---------- */
+
+        // fixed search order (names must match State.outlets name)
+        const FETCH_OUTLET_ORDER_NAMES = ["USA", "Japan", "France", "DACH", "Spain", "ROW", "Canada", "MENA", "Taiwan", "Portugal", "Brazil", "Italy", "Belgium"];
+
+        // cancel token for running fetches
+        let _fetchCancelToken = { cancelled: false };
+
+        // renderFetchPage - called by router
+        function renderFetchPage() {
+            // ensure inputs exist (in case user loaded old HTML)
+            const input = $('fetchInput');
+            const runBtn = $('runFetchBtn');
+            const cancelBtn = $('cancelFetchBtn');
+            const exportBtn = $('exportFetchBtn');
+
+            if (!input || !runBtn || !cancelBtn || !exportBtn) return;
+
+            // wire events (idempotent)
+            runBtn.onclick = async () => {
+                _fetchCancelToken.cancelled = false;
+                cancelBtn.style.display = 'inline-block';
+                runBtn.disabled = true;
+                try {
+                    const text = input.value || '';
+                    const pairs = parseFetchInput(text);
+                    if (!pairs.length) return alert('No valid rows found in input.');
+                    // build outlet id order from names
+                    const outletIds = FETCH_OUTLET_ORDER_NAMES.map(n => {
+                        const m = State.outlets.find(x => (x.name || '').toLowerCase() === (n || '').toLowerCase());
+                        return m ? m.id : null;
+                    }).filter(Boolean);
+                    showLoading('Searching outlets...', 0);
+                    const results = await runFetchEvents(pairs, outletIds, _fetchCancelToken, pct => setLoadingProgress(pct));
+                    hideLoading();
+                    renderFetchResults(results);
+                } catch (err) {
+                    hideLoading();
+                    console.error('FetchEvents error', err);
+                    alert('Error while searching: ' + (err && err.message ? err.message : String(err)));
+                } finally {
+                    runBtn.disabled = false;
+                    cancelBtn.style.display = 'none';
+                    _fetchCancelToken.cancelled = false;
+                }
+            };
+
+            cancelBtn.onclick = () => {
+                _fetchCancelToken.cancelled = true;
+                cancelBtn.style.display = 'none';
+                setTimeout(() => hideLoading(), 200);
+            };
+
+            exportBtn.onclick = () => exportFetchResultsXLSX();
+        }
+
+        // parse input: each non-empty line -> [override, mfl]
+        // accepts tab, comma, or whitespace as separator; returns array of {overrideId,mflId}
+        function parseFetchInput(text) {
+            const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const pairs = [];
+            for (const line of lines) {
+                // split by tab or comma first, else by whitespace
+                let parts = line.split('\t');
+                if (parts.length < 2) parts = line.split(',');
+                if (parts.length < 2) parts = line.trim().split(/\s+/);
+                const a = (parts[0] || '').trim();
+                const b = (parts[1] || '').trim();
+                if (a || b) pairs.push({ overrideId: a, mflId: b });
+            }
+            return pairs;
+        }
+
+        // runFetchEvents: ensures outlets are fetched, then searches pairs across outlets in order.
+        // - pairs: [{overrideId,mflId},...]
+        // - outletIds: array of outlet ids (ordered)
+        // - cancelToken: { cancelled: false }
+        // - progressCb: function(percentInt)
+        async function runFetchEvents(pairs, outletIds, cancelToken = { cancelled: false }, progressCb = () => { }) {
+            // prefetch all outlets (parallel), update progress
+            let completed = 0, total = outletIds.length || 1;
+            await Promise.all(outletIds.map(async (oid) => {
+                if (cancelToken.cancelled) return;
+                await fetchOutlet(oid).catch(() => { });
+                completed++;
+                progressCb(Math.round((completed / total) * 50)); // allocate first 50% to fetching
+            }));
+
+            if (cancelToken.cancelled) throw new Error('Cancelled');
+
+            const results = [];
+            // For speed, build a per-outlet index by overrideId (string normalized) to list of rows
+            const perOutletMaps = {};
+            for (const oid of outletIds) {
+                const rows = State.flattened[oid] || [];
+                const map = { overrideIndex: new Map(), rawRows: rows };
+                rows.forEach((r, idx) => {
+                    // normalize override id(s)
+                    const cand = (r.overrideId || '') + '';
+                    if (cand) {
+                        const list = cand.split(',').map(x => String(x).trim().toLowerCase()).filter(Boolean);
+                        list.forEach(k => {
+                            if (!map.overrideIndex.has(k)) map.overrideIndex.set(k, []);
+                            map.overrideIndex.get(k).push(r);
+                        });
+                    }
+                    // also attempt raw.overrideId array
+                    try {
+                        const ro = r.raw && r.raw.overrideId;
+                        if (Array.isArray(ro)) ro.forEach(o => {
+                            const k = String(o || '').trim().toLowerCase();
+                            if (!k) return;
+                            if (!map.overrideIndex.has(k)) map.overrideIndex.set(k, []);
+                            map.overrideIndex.get(k).push(r);
+                        });
+                    } catch (e) { /* ignore */ }
+                });
+                perOutletMaps[oid] = map;
+            }
+
+            // iterate pairs and search through outlets in order
+            let pairCount = 0, totalPairs = pairs.length;
+            for (const pair of pairs) {
+                if (cancelToken.cancelled) throw new Error('Cancelled');
+                pairCount++;
+                const normOv = (pair.overrideId || '').toString().trim().toLowerCase();
+                const normMfl = (pair.mflId || '').toString().trim().toLowerCase();
+                const foundOutlets = [];
+                let firstFound = null;
+                let firstRow = null;
+
+                for (const oid of outletIds) {
+                    if (cancelToken.cancelled) throw new Error('Cancelled');
+
+                    const map = perOutletMaps[oid] || { overrideIndex: new Map(), rawRows: [] };
+
+                    // quick check: if override index has entries, test those rows
+                    let candidateRows = [];
+                    if (normOv && map.overrideIndex.has(normOv)) {
+                        candidateRows = map.overrideIndex.get(normOv);
+                    } else {
+                        // fallback: search all rows (rare)
+                        candidateRows = (map.rawRows || []);
+                    }
+
+                    // test candidateRows for mfl match
+                    let matchedRow = null;
+                    for (const r of candidateRows) {
+                        if (matchRowByOverrideAndMFL(r, normOv, normMfl)) {
+                            matchedRow = r;
+                            break;
+                        }
+                    }
+
+                    if (matchedRow) {
+                        foundOutlets.push(oid);
+                        if (!firstFound) {
+                            firstFound = oid;
+                            firstRow = matchedRow;
+                        }
+                        // continue loop to collect other outlets where present (but don't override firstRow)
+                    }
+                }
+
+                results.push({
+                    overrideId: pair.overrideId || '',
+                    mflId: pair.mflId || '',
+                    found: !!firstFound,
+                    firstOutletId: firstFound,
+                    foundRow: firstRow ? firstRow : null,
+                    outletsFound: foundOutlets
+                });
+
+                // progress: allocate remaining 50% across pairs
+                const pct = 50 + Math.round((pairCount / totalPairs) * 50);
+                progressCb(pct);
+            }
+
+            return results;
+        }
+
+        // matchRowByOverrideAndMFL - robust checks (override vs override in row, and MFL present in known fields or JSON)
+        function matchRowByOverrideAndMFL(row, normOverride, normMfl) {
+            // normalize helper
+            const norm = (s) => (s || '').toString().trim().toLowerCase();
+
+            // OVERRIDE check: if provided, find exact match in overrideId (string or array)
+            if (normOverride) {
+                const cand = norm(row.overrideId || row.raw && row.raw.overrideId || '');
+                if (cand) {
+                    // cand could be comma separated or single
+                    const arr = String(cand).split(',').map(x => x.trim()).filter(Boolean);
+                    if (arr.includes(normOverride)) {
+                        // override matched - now check MFL (if provided)
+                        // allow continuing to MFL check below
+                    } else {
+                        // not matched -> return false
+                        return false;
+                    }
+                } else {
+                    // if row has raw.overrideId array, check those
+                    if (row.raw && Array.isArray(row.raw.overrideId)) {
+                        const arr = row.raw.overrideId.map(x => String(x || '').trim().toLowerCase());
+                        if (!arr.includes(normOverride)) return false;
+                    } else {
+                        // no override info on row -> treat as not match
+                        return false;
+                    }
+                }
+            }
+
+            // MFL check: if no MFL provided, treat as matched by override alone
+            if (!normMfl) return true;
+
+            // Try common fields that may contain the MFL
+            const tryFields = [
+                (row.raw && row.raw['lnk.urn:perform:mfl:fixture']),
+                (row.raw && row.raw.lnk),
+                (row.raw && row.raw.links),
+                (row.raw && row.raw['links'])
+            ];
+
+            for (const f of tryFields) {
+                if (!f) continue;
+                try {
+                    const s = typeof f === 'string' ? f : JSON.stringify(f);
+                    if (s.toLowerCase().includes(normMfl)) return true;
+                } catch (e) { /* ignore */ }
+            }
+
+            // fallback: search whole raw JSON string for mfl
+            try {
+                const js = JSON.stringify(row.raw || {});
+                if (js.toLowerCase().includes(normMfl)) return true;
+            } catch (e) { /* ignore */ }
+
+            // not found
+            return false;
+        }
+
+        // renderFetchResults(results) - produce a table with columns: Override, MFL, (normal headers...), Outlet
+        function renderFetchResults(results) {
+            const container = $('fetchResultsContainer');
+            container.innerHTML = '';
+
+            if (!results || !results.length) {
+                container.appendChild(el('div', { class: 'muted' }, 'No results'));
+                return;
+            }
+
+            // build union of headers same as Normal page preferred + any keys from found rows
+            const preferred = ['streamId', 'oaId', 'description', 'streamStartTime', 'streamEndTime', 'drmRequired', 'lastModTime'];
+            const keySet = new Set();
+            results.forEach(r => {
+                if (r.foundRow && r.foundRow.raw) {
+                    try { Object.keys(r.foundRow.raw || {}).forEach(k => keySet.add(k)); } catch (e) { }
+                }
+            });
+            const otherKeys = Array.from(keySet).filter(k => !preferred.includes(k));
+            const headers = ['Override', 'MFL'].concat(preferred, otherKeys, ['Outlet']);
+
+            // build table
+            const table = el('table', { class: 'data' });
+            // header row with copy buttons
+            const theadRow = el('tr', {}, headers.map((h, idx) => {
+                const th = el('th', {}, [h]);
+                // add copy button on each header
+                const copyBtn = el('button', { class: 'btn small', onclick: (ev) => { ev.stopPropagation(); copyColumn(table, idx); } }, '⎘');
+                th.appendChild(el('div', { style: 'display:inline-block;margin-left:8px;vertical-align:middle' }, copyBtn));
+                return th;
+            }));
+            table.appendChild(el('thead', {}, theadRow));
+
+            const tbody = el('tbody');
+            results.forEach(res => {
+                const rowVals = [];
+                rowVals.push(res.overrideId || '');
+                rowVals.push(res.mflId || '');
+                const rrow = res.foundRow || {};
+                const raw = rrow.raw || {};
+
+                // preferred keys (try flattened property first, else raw)
+                preferred.forEach(k => {
+                    let v = (rrow[k] !== undefined ? rrow[k] : (raw[k] !== undefined ? raw[k] : ''));
+                    if (typeof v === 'object') try { v = JSON.stringify(v); } catch (e) { v = String(v); }
+                    rowVals.push(v === undefined ? '' : String(v));
+                });
+
+                // other keys
+                otherKeys.forEach(k => {
+                    let v = (rrow[k] !== undefined ? rrow[k] : (raw[k] !== undefined ? raw[k] : ''));
+                    if (typeof v === 'object') try { v = JSON.stringify(v); } catch (e) { v = String(v); }
+                    rowVals.push(v === undefined ? '' : String(v));
+                });
+
+                // Outlet column: show names (first found first)
+                const outletsNames = (res.outletsFound || []).map(id => (State.outlets.find(x => x.id === id)?.name || id));
+                const outletCell = outletsNames.length ? outletsNames.join(', ') : (res.found ? (State.outlets.find(x => x.id === res.firstOutletId)?.name || res.firstOutletId) : 'Not found');
+                rowVals.push(outletCell);
+
+                // create tr
+                const tr = el('tr', {}, rowVals.map(rv => el('td', {}, rv)));
+
+                // highlight row if not found
+                if (!res.found) tr.classList.add('notfound');
+
+                tbody.appendChild(tr);
+            });
+
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+
+        // copyColumn helper: copies column cells (0-based idx) text to clipboard
+        function copyColumn(tableEl, colIndex) {
+            try {
+                const rows = Array.from(tableEl.querySelectorAll('tbody tr'));
+                const vals = rows.map(r => {
+                    const cells = r.querySelectorAll('td');
+                    if (cells && cells[colIndex]) return cells[colIndex].innerText || cells[colIndex].textContent || '';
+                    return '';
+                });
+                const joined = vals.join('\n');
+                navigator.clipboard.writeText(joined).then(() => {
+                    // small visual feedback
+                    console.log('Copied column', colIndex);
+                }).catch(err => {
+                    console.warn('Clipboard write failed', err);
+                    // fallback: prompt
+                    prompt('Copy column values (ctrl+c):', joined);
+                });
+            } catch (e) {
+                console.error('copyColumn error', e);
+            }
+        }
+
+        // exportFetchResultsXLSX - reuse ExcelJS
+        async function exportFetchResultsXLSX() {
+            const container = $('fetchResultsContainer');
+            if (!container || !container.querySelector('table.data')) return alert('No results to export');
+            const table = container.querySelector('table.data');
+
+            const wb = new ExcelJS.Workbook(); wb.creator = 'Livestream Puller';
+            const sh = wb.addWorksheet('FetchResults');
+
+            // header row
+            const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.innerText.trim());
+            sh.addRow(headers);
+
+            // rows
+            const trs = Array.from(table.querySelectorAll('tbody tr'));
+            trs.forEach(tr => {
+                const vals = Array.from(tr.querySelectorAll('td')).map(td => td.innerText || td.textContent || '');
+                sh.addRow(vals);
+            });
+
+            // basic border & font formatting
+            const thin = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            sh.eachRow(row => {
+                row.eachCell(cell => {
+                    cell.border = thin;
+                    cell.font = { name: 'Calibri', size: 11 };
+                    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                });
+            });
+
+            // autosize
+            try {
+                sh.columns.forEach(col => {
+                    let max = 10;
+                    col.eachCell({ includeEmpty: true }, cell => {
+                        const l = cell.value ? String(cell.value).length : 0;
+                        if (l > max) max = Math.min(l, 120);
+                    });
+                    col.width = Math.min(60, Math.max(12, Math.ceil(max * 0.9)));
+                });
+            } catch (e) { }
+
+            const buf = await wb.xlsx.writeBuffer();
+            saveAs(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `FetchResults-${(new Date()).toISOString().slice(0, 10)}.xlsx`);
+        }
+
         async function exportNormalXLSX() {
             const rows = State.flattened[State.selectedOutlet] || [];
             if (!rows.length) return alert('No data to export');
