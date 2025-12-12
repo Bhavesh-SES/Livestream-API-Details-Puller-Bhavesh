@@ -648,7 +648,7 @@
 
             // Proxy URL (set to your proxy server to route requests through an office/Render proxy).
             // If empty string or null, the code will use CONFIG.BASE_API_TEMPLATE for direct upstream calls.
-            PROXY_URL: 'http://localhost:8000' // example for local dev; change to your render URL in prod
+            PROXY_URL: 'http://10.219.226.10:8000' // example for local dev; change to your render URL in prod
         };
 
 
@@ -716,16 +716,16 @@
         function setLoadingProgress(p) { ensureLoadingDom(); const elp = $('ls-loader-pct'); if (elp) elp.textContent = String(p) + '%' }
         function hideLoading() { const ov = $('ls-loader-overlay'); if (ov) ov.style.display = 'none' }
 
-        /* ---------- API URL builder (use local proxy or direct) ---------- */
+        /* ---------- API URL builder (use local proxy or direct) ---------- 
         function createApiUrl(outletId) {
             // default to local proxy during development
             // return `http://localhost:8000/api/outlet/${encodeURIComponent(outletId)}`; just un-comment this block to use the Proxy server runnig from the local server to fetch the API response until the Server IP is whitelisted in every regions to fetch the response.
             // to call upstream directly (only if CORS allowed), use:
             // return CONFIG.BASE_API_TEMPLATE.replace('OutletID_PASTE', encodeURIComponent(outletId));
-        }
+        } */
 
         /* ---------- API URL builder (use proxy if configured, otherwise direct) ---------- */
-        function createApiUrl(outletId) {
+        /* function createApiUrl(outletId) {
             const id = encodeURIComponent(outletId);
             // 1) If a PROXY_URL is configured, call the proxy (recommended when upstream is IP-restricted)
             if (CONFIG.PROXY_URL && String(CONFIG.PROXY_URL).trim() !== '') {
@@ -735,7 +735,101 @@
             }
             // 2) Fallback: call upstream directly (only works if upstream allows CORS & client IPs are allowed)
             return CONFIG.BASE_API_TEMPLATE.replace('OutletID_PASTE', id);
+        } */
+
+        /* ---------- API URL builder + resilient fetch (direct first, proxy fallback) ---------- */
+
+        /**
+         * Build direct upstream URL for an outlet (not proxy)
+         */
+        function buildDirectUrl(outletId) {
+            return CONFIG.BASE_API_TEMPLATE.replace('OutletID_PASTE', encodeURIComponent(outletId));
         }
+
+        /**
+         * Build proxy URL for an outlet (if configured)
+         */
+        function buildProxyUrl(outletId) {
+            if (!CONFIG.PROXY_URL) return null;
+            const base = String(CONFIG.PROXY_URL).replace(/\/$/, '');
+            return `${base}/api/outlet/${encodeURIComponent(outletId)}`;
+        }
+
+        /**
+         * createApiUrl is kept for backward compatibility; prefer using fetchOutlet which
+         * will attempt direct then proxy.
+         */
+        function createApiUrl(outletId, preferProxy = false) {
+            if (preferProxy) return buildProxyUrl(outletId) || buildDirectUrl(outletId);
+            // default: prefer direct, fallback to proxy inside fetchOutlet
+            return buildDirectUrl(outletId);
+        }
+
+        /**
+         * fetchOutlet — tries direct upstream first; on any failure (network/CORS/non-OK/parse)
+         * it will attempt proxy (if configured). Caches results in State.cache and
+         * fills State.flattened[outletId] like before.
+         */
+        async function fetchOutlet(outletId) {
+            // return cached result if available
+            if (State.cache[outletId]) return State.cache[outletId].data;
+
+            const directUrl = buildDirectUrl(outletId);
+            const proxyUrl = buildProxyUrl(outletId);
+
+            // helper to perform fetch + json parse + status check
+            async function tryFetchJson(url) {
+                const resp = await timeoutPromise(fetch(url, { method: 'GET', headers: { Accept: 'application/json' } }), CONFIG.FETCH_TIMEOUT);
+                // If response is not OK, throw to trigger fallback
+                if (!resp || !resp.ok) throw new Error('HTTP ' + (resp && resp.status));
+                // Try parse as JSON (some endpoints may send gzipped bodies — fetch will handle)
+                const text = await resp.text();
+                try {
+                    // prefer parse JSON; if not JSON, return empty array
+                    const json = text ? JSON.parse(text) : null;
+                    // normalize to array shape similar to previous code
+                    if (Array.isArray(json)) return json;
+                    if (Array.isArray(json.streams)) return json.streams;
+                    if (Array.isArray(json.items)) return json.items;
+                    if (typeof json === 'object' && json.streamId) return [json];
+                    // If JSON but shape unknown — return as empty array (previous code handled some shapes)
+                    return [];
+                } catch (e) {
+                    // JSON parse failed — throw so caller can fallback
+                    throw new Error('Invalid JSON: ' + (e && e.message));
+                }
+            }
+
+            // Attempt direct upstream first
+            try {
+                const items = await tryFetchJson(directUrl);
+                State.cache[outletId] = { fetchedAt: Date.now(), data: items };
+                State.flattened[outletId] = items.map(flattenStream);
+                return items;
+            } catch (directErr) {
+                // log & continue to fallback to proxy
+                console.warn('[fetchOutlet] direct fetch failed:', directErr && directErr.message ? directErr.message : directErr);
+            }
+
+            // If proxy configured, try proxy
+            if (proxyUrl) {
+                try {
+                    const items = await tryFetchJson(proxyUrl);
+                    State.cache[outletId] = { fetchedAt: Date.now(), data: items };
+                    State.flattened[outletId] = items.map(flattenStream);
+                    return items;
+                } catch (proxyErr) {
+                    console.error('[fetchOutlet] proxy fetch failed:', proxyErr && proxyErr.message ? proxyErr.message : proxyErr);
+                    // fallthrough to empty
+                }
+            }
+
+            // Both methods failed — keep same behavior as original: cache empty and return []
+            State.cache[outletId] = { fetchedAt: Date.now(), data: [], error: 'fetch_failed' };
+            State.flattened[outletId] = [];
+            return [];
+        }
+
 
 
         /* ---------- App state ---------- */
