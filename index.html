@@ -644,8 +644,13 @@
                 { name: "Canada", id: "wbac02p8ie5111jaeapaal6kq" },
                 { name: "MENA", id: "yoiaw6eoma751d1ztrojskjt2" }
             ],
-            FETCH_TIMEOUT: 30000
+            FETCH_TIMEOUT: 30000,
+
+            // Proxy URL (set to your proxy server to route requests through an office/Render proxy).
+            // If empty string or null, the code will use CONFIG.BASE_API_TEMPLATE for direct upstream calls.
+            PROXY_URL: 'http://localhost:8000' // example for local dev; change to your render URL in prod
         };
+
 
         /* ---------- Helpers ---------- */
         function $(id) { return document.getElementById(id) }
@@ -714,10 +719,24 @@
         /* ---------- API URL builder (use local proxy or direct) ---------- */
         function createApiUrl(outletId) {
             // default to local proxy during development
-            return `http://localhost:8000/api/outlet/${encodeURIComponent(outletId)}`;
+            // return `http://localhost:8000/api/outlet/${encodeURIComponent(outletId)}`; just un-comment this block to use the Proxy server runnig from the local server to fetch the API response until the Server IP is whitelisted in every regions to fetch the response.
             // to call upstream directly (only if CORS allowed), use:
             // return CONFIG.BASE_API_TEMPLATE.replace('OutletID_PASTE', encodeURIComponent(outletId));
         }
+
+        /* ---------- API URL builder (use proxy if configured, otherwise direct) ---------- */
+        function createApiUrl(outletId) {
+            const id = encodeURIComponent(outletId);
+            // 1) If a PROXY_URL is configured, call the proxy (recommended when upstream is IP-restricted)
+            if (CONFIG.PROXY_URL && String(CONFIG.PROXY_URL).trim() !== '') {
+                // ensure no trailing slash
+                const base = String(CONFIG.PROXY_URL).replace(/\/$/, '');
+                return `${base}/api/outlet/${id}`;
+            }
+            // 2) Fallback: call upstream directly (only works if upstream allows CORS & client IPs are allowed)
+            return CONFIG.BASE_API_TEMPLATE.replace('OutletID_PASTE', id);
+        }
+
 
         /* ---------- App state ---------- */
         const State = {
