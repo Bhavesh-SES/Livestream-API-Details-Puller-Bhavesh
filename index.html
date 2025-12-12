@@ -2305,7 +2305,7 @@
         function setTheme(t) { document.body.setAttribute('data-theme', t); State.theme = t; themeToggle.checked = (t === 'dark'); }
         setTheme('light');
 
-        document.addEventListener('contextmenu', event => event.preventDefault());
+        /* document.addEventListener('contextmenu', event => event.preventDefault());   Uncomment this block to block right click
         document.addEventListener('keydown', e => {
             if (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'i' || e.key === 'I' || e.key === 'j' || e.key === 'J')) {
                 e.preventDefault();
@@ -2313,7 +2313,7 @@
             if (e.keyCode === 123) { // F12 key
                 e.preventDefault();
             }
-        });
+        }); */
 
         /* ---------- Boot ---------- */
         initUI();
